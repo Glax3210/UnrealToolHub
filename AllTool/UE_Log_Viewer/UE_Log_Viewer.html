@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Unreal Engine Log Viewer — Stable Single File (V6)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #2e2e2e;
+    --text: #ccc;
+    --muted: #777;
+    --accent: #444;
+    --error: #ff6b6b;
+    --warning: #f0e68c;
+    --display: #8ef28e;
+    --line-padding: 6px;
+    --line-number-width: 52px;
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Courier New", Courier, monospace;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .wrap {
+    max-width: 1440px; /* Wider layout */
+    margin: 12px auto;
+    padding: 12px;
+  }
+
+  h2 {
+    margin: 6px 0 10px 0;
+    color: var(--text);
+  }
+
+  #options {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  button, label, select, input {
+    background: var(--accent);
+    color: #fff;
+    border: 1px solid #555;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+
+  button:active {
+    transform: translateY(1px);
+  }
+
+  #stats {
+    margin-bottom: 8px;
+    color: var(--muted);
+  }
+
+  textarea#text-input {
+    width: 100%;
+    height: 64px;
+    resize: vertical;
+    padding: 8px;
+    background: #2a2a2a;
+    color: var(--text);
+    border: 1px solid #444;
+    box-sizing: border-box;
+    border-radius: 6px;
+  }
+
+  #drop-zone {
+    margin-top: 8px;
+    border: 2px dashed #555;
+    padding: 12px;
+    text-align: center;
+    color: #999;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+  }
+
+  #drop-zone.dragover {
+    border-color: #888;
+    background: #2a2a2a;
+    color: #ddd;
+  }
+
+  #controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 10px 0 12px 0;
+    flex-wrap: wrap;
+  }
+
+  #search-input {
+    padding: 6px;
+    background: #333;
+    color: #fff;
+    border: 1px solid #555;
+    width: 260px;
+    border-radius: 6px;
+  }
+
+  /* Viewer Area - Single Scrollbar, now with horizontal scrolling */
+  #log-container {
+    border: 1px solid #444;
+    background: var(--panel);
+    height: 64vh;
+    max-height: 78vh;
+    position: relative;
+    overflow: auto; /* Handles both vertical and horizontal scrolling */
+    border-radius: 6px;
+  }
+
+  /* Spacer holds full scroll height; visible-layer contains absolutely positioned rows */
+  #spacer {
+    width: 1px;
+    opacity: 0;
+  }
+
+  #visible-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    min-width: 100%;
+    /* No longer a separate scroll wrapper, so pointer events are handled here */
+    pointer-events: auto;
+  }
+
+  /* Each line: fixed height and width to prevent wrapping */
+  .line {
+    position: absolute;
+    left: 0;
+    padding: var(--line-padding);
+    box-sizing: border-box;
+    white-space: nowrap;
+    display: flex;
+    font-family: inherit;
+    cursor: default;
+    user-select: text;
+  }
+
+  .line .ln {
+    display: inline-block;
+    width: var(--line-number-width);
+    text-align: right;
+    margin-right: 12px;
+    color: var(--muted);
+    user-select: none;
+    flex: 0 0 auto;
+  }
+
+  .line .text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .line.no-clamp .text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: pre;
+  }
+
+  .error {
+    color: var(--error);
+  }
+
+  .warning {
+    color: var(--warning);
+  }
+
+  .display {
+    color: var(--display);
+  }
+
+  .verbose {
+    color: #aaaaaa;
+  }
+
+  .log {
+    color: var(--text);
+  }
+
+  .line.highlighted {
+    box-shadow: 0 0 8px 3px rgba(255, 255, 0, 0.25);
+    animation: hl 900ms ease-out;
+  }
+
+  @keyframes hl {
+    from {
+      box-shadow: 0 0 8px 3px rgba(255, 255, 0, 0.6);
+    }
+    to {
+      box-shadow: none;
+    }
+  }
+
+  .flex-right {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+
+  .filter-btn {
+    background: #333;
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
+  .filter-btn.active {
+    background: #5b5b5b;
+  }
+
+  /* Modal for full-line view */
+  #fullline-modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 3000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease;
+  }
+
+  #fullline-modal.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  #fullline-modal .card {
+    width: 90%;
+    max-width: 1060px;
+    max-height: 80vh;
+    overflow: auto;
+    background: #111;
+    border: 1px solid #333;
+    padding: 18px;
+    border-radius: 8px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+    color: var(--text);
+    font-family: monospace;
+  }
+
+  #fullline-modal .meta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+
+  #modal-close {
+    float: right;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid #444;
+    padding: 4px 8px;
+    border-radius: 6px;
+    color: #fff;
+  }
+
+  @media (max-width: 720px) {
+    #search-input {
+      width: 160px;
+    }
+    .wrap {
+      padding: 8px;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="text-align:center;color:#999;margin-bottom:6px;">Author: Glax3210 — Stable V6</div>
+  <h2>Unreal Engine Log Viewer — Stable (V6)</h2>
+
+  <div id="options">
+    <button id="export-btn">Export Filtered Logs</button>
+    <button id="theme-btn">Toggle Theme</button>
+
+    <div class="flex-right">
+      <select id="zoom-percentage" title="Zoom">
+        <option value="75">75%</option>
+        <option value="90">90%</option>
+        <option value="100" selected>100%</option>
+        <option value="125">125%</option>
+        <option value="150">150%</option>
+        <option value="175">175%</option>
+        <option value="200">200%</option>
+      </select>
+      <button id="zoom-in">+</button>
+      <button id="zoom-out">-</button>
+    </div>
+  </div>
+
+  <div id="stats">
+    <span id="total-lines">Total Lines: 0</span> |
+    <span id="error-count">Errors: 0</span> |
+    <span id="warning-count">Warnings: 0</span>
+  </div>
+
+  <textarea id="text-input" placeholder="Paste log text..."></textarea>
+  <div id="drop-zone">Drag &amp; drop log file here or click to browse</div>
+  <input id="file-input" type="file" accept=".txt,.log" style="display:none">
+
+  <div id="controls">
+    <button id="view-btn">View Log</button>
+    <div style="margin-left:8px;display:flex;gap:6px;align-items:center;">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="error">Error</button>
+      <button class="filter-btn" data-filter="warning">Warning</button>
+      <button class="filter-btn" data-filter="display">Display</button>
+      <button class="filter-btn" data-filter="verbose">Verbose</button>
+      <button id="goto-first-error" title="Go to the first error">Go to First Error</button>
+      <button id="goto-last-error" title="Go to the last error">Go to Last Error</button>
+    </div>
+    <input id="search-input" placeholder="Search Logs" />
+    <label title="Toggle whether lines are clamped with ellipsis (preventing wrap/overlap)">
+      <input type="checkbox" id="clamp-toggle" checked style="margin-right:6px"> Clamp long lines
+    </label>
+  </div>
+
+  <div id="log-container" tabindex="0" aria-label="Log viewer">
+    <div id="visible-layer"></div>
+    <div id="spacer"></div>
+  </div>
+
+</div>
+
+<div id="toast" role="status" aria-live="polite" style="position:fixed;right:18px;bottom:18px;background:#222;color:#fff;border:1px solid #444;padding:10px 14px;border-radius:8px;opacity:0;transform:translateY(20px);transition:opacity .22s,transform .22s;z-index:2000;"></div>
+
+<div id="fullline-modal" aria-hidden="true">
+  <div class="card" role="dialog" aria-modal="true">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="meta" id="modal-meta">Line 0</div>
+      <button id="modal-close">Close</button>
+    </div>
+    <pre id="modal-content" style="white-space:pre-wrap;font-family:monospace;margin:8px 0 0 0;"></pre>
+  </div>
+</div>
+
+<script>
+/* Unreal Engine Log Viewer — V6: stable, bug-fixed version.
+   This version fixes the double-scrollbar and missing lines bugs
+   from V2 while retaining all of its advanced features.
+   It also fixes the text clipping issue on zoom and the zoom buttons,
+   and unifies the file input area.
+*/
+
+/* ---------- selectors ---------- */
+const logContainer = document.getElementById('log-container');
+const visibleLayer = document.getElementById('visible-layer');
+const spacer = document.getElementById('spacer');
+const textInput = document.getElementById('text-input');
+const fileInput = document.getElementById('file-input');
+const dropZone = document.getElementById('drop-zone');
+const searchInput = document.getElementById('search-input');
+const totalLinesEl = document.getElementById('total-lines');
+const errorCountEl = document.getElementById('error-count');
+const warningCountEl = document.getElementById('warning-count');
+const toast = document.getElementById('toast');
+const exportBtn = document.getElementById('export-btn');
+const viewBtn = document.getElementById('view-btn');
+const zoomSelect = document.getElementById('zoom-percentage');
+const zoomIn = document.getElementById('zoom-in');
+const zoomOut = document.getElementById('zoom-out');
+const filterButtons = Array.from(document.querySelectorAll('.filter-btn'));
+const gotoFirstErrorBtn = document.getElementById('goto-first-error');
+const gotoLastErrorBtn = document.getElementById('goto-last-error');
+const clampToggle = document.getElementById('clamp-toggle');
+
+const modal = document.getElementById('fullline-modal');
+const modalContent = document.getElementById('modal-content');
+const modalMeta = document.getElementById('modal-meta');
+const modalClose = document.getElementById('modal-close');
+const themeBtn = document.getElementById('theme-btn');
+
+/* ---------- state ---------- */
+let linesMeta = [];          // { raw, escaped, type, number } original lines
+let displayIndexMap = [];    // indices after filter+search
+let searchMatches = new Set();
+let currentFilter = 'all';
+let lineHeight = 18;
+let buffer = 60;
+let totalErrors = 0, totalWarnings = 0;
+let currentZoom = 13; // Base font size in pixels
+
+/* ---------- helpers ---------- */
+const ansiRegex = /\x1b\[[0-9;]*m/g;
+function stripAnsi(s){ return s.replace(ansiRegex,''); }
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, ch => {
+    switch(ch){
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+    }
+  });
+}
+function showToast(msg, ms=1600){
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=> toast.classList.remove('show'), ms);
+}
+
+function computeLineHeight(){
+  let sample = document.getElementById('__lineheight_sample_v6');
+  if(!sample){
+    sample = document.createElement('div');
+    sample.id = '__lineheight_sample_v6';
+    sample.style.position = 'absolute';
+    sample.style.left = '-9999px';
+    sample.style.top = '0';
+    sample.style.visibility = 'hidden';
+    sample.style.fontFamily = 'Courier New, Courier, monospace';
+    sample.style.padding = 'var(--line-padding)';
+    sample.style.whiteSpace = 'nowrap';
+    sample.textContent = 'M';
+    document.body.appendChild(sample);
+  }
+  sample.style.fontSize = getComputedStyle(logContainer).fontSize;
+  const rect = sample.getBoundingClientRect();
+  lineHeight = Math.ceil(rect.height);
+}
+
+/* ---------- log processing ---------- */
+function processLogText(rawText){
+  linesMeta = [];
+  displayIndexMap = [];
+  searchMatches.clear();
+  currentFilter = 'all';
+  totalErrors = 0; totalWarnings = 0;
+
+  const rawLines = rawText.split(/\r?\n/);
+  rawLines.forEach((ln, idx) => {
+    const stripped = stripAnsi(ln);
+    const esc = escapeHtml(stripped);
+    let type = 'log';
+    if (/Error:/i.test(stripped)) { type = 'error'; totalErrors++; }
+    else if (/Warning:/i.test(stripped)) { type = 'warning'; totalWarnings++; }
+    else if (/Display:/i.test(stripped)) type = 'display';
+    else if (/VeryVerbose:/i.test(stripped)) type = 'veryverbose';
+    else if (/Verbose:/i.test(stripped)) type = 'verbose';
+    linesMeta.push({ raw: stripped, escaped: esc, type, number: idx+1 });
+  });
+
+  displayIndexMap = linesMeta.map((_,i)=>i);
+  totalLinesEl.textContent = 'Total Lines: ' + linesMeta.length;
+  errorCountEl.textContent = 'Errors: ' + totalErrors;
+  warningCountEl.textContent = 'Warnings: ' + totalWarnings;
+
+  computeLineHeight();
+  updateSpacer();
+  scheduleRender();
+  showToast('Loaded ' + linesMeta.length + ' lines');
+}
+
+/* spacer represents full scroll height (based on display list and lineHeight) */
+function updateSpacer(){
+  const totalVisibleCount = displayIndexMap.length;
+  spacer.style.height = (totalVisibleCount * lineHeight) + 'px';
+}
+
+/* rebuild displayIndexMap from filters + search */
+function rebuildDisplayIndexMap(){
+  const arr = [];
+  const f = currentFilter;
+  const usingSearch = searchInput.value.trim().length > 0;
+  const matchSet = searchMatches;
+  for(let i=0;i<linesMeta.length;i++){
+    const m = linesMeta[i];
+    if(f !== 'all' && m.type !== f) continue;
+    if(usingSearch && !matchSet.has(i)) continue;
+    arr.push(i);
+  }
+  displayIndexMap = arr;
+  updateSpacer();
+}
+
+/* ---------- rendering (virtual scrolling) ---------- */
+function renderVisibleLines(){
+  if(!linesMeta.length){
+    visibleLayer.innerHTML = '';
+    return;
+  }
+  const scrollTop = logContainer.scrollTop;
+  const containerHeight = logContainer.clientHeight;
+
+  const firstVisibleRow = Math.floor(scrollTop / lineHeight);
+  const visibleCount = Math.ceil(containerHeight / lineHeight);
+
+  const startPos = Math.max(0, firstVisibleRow - buffer);
+  const endPos = Math.min(displayIndexMap.length, firstVisibleRow + visibleCount + buffer);
+
+  let html = '';
+  const isClamped = clampToggle.checked;
+  for(let pos=startPos; pos<endPos; pos++){
+    const originalIndex = displayIndexMap[pos];
+    const meta = linesMeta[originalIndex];
+    const top = pos * lineHeight;
+    const isMatch = searchMatches.has(originalIndex) && searchInput.value.trim().length > 0;
+    const cls = ['line', meta.type, isMatch ? 'search-hit' : ''].join(' ');
+    const clampClass = isClamped ? '' : 'no-clamp';
+
+    html += `<div class="${cls} ${clampClass}" data-orig="${originalIndex}" data-pos="${pos}" style="top:${top}px; height:${lineHeight}px;">
+               <span class="ln">${meta.number}</span>
+               <span class="text" title="${meta.raw.replace(/"/g,'&quot;')}">${meta.escaped}</span>
+             </div>`;
+  }
+  visibleLayer.innerHTML = html;
+}
+
+const scheduleRender = (function(){
+  let raf = null;
+  return function(){
+    if(raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(()=>{ renderVisibleLines(); raf = null; });
+  };
+})();
+
+/* ---------- search ---------- */
+function doSearchSync(q){
+  searchMatches.clear();
+  if(!q) return;
+  const lower = q.toLowerCase();
+  for(let i=0;i<linesMeta.length;i++){
+    if(linesMeta[i].raw.toLowerCase().includes(lower)) searchMatches.add(i);
+  }
+}
+const doSearch = debounce(() => {
+  const q = searchInput.value.trim();
+  if(q.length === 0) { searchMatches.clear(); }
+  else doSearchSync(q);
+  rebuildDisplayIndexMap();
+  scheduleRender();
+}, 160);
+
+/* debounce helper */
+function debounce(fn, wait){ let t; return function(...a){ clearTimeout(t); t = setTimeout(()=> fn.apply(this,a), wait); }; }
+
+/* ---------- interactions ---------- */
+visibleLayer.addEventListener('click', (ev) => {
+  const lineEl = ev.target.closest('.line');
+  if(!lineEl) return;
+  const orig = parseInt(lineEl.dataset.orig,10);
+  if(isNaN(orig)) return;
+
+  if(ev.shiftKey || ev.metaKey || ev.ctrlKey){
+    openModalForLine(orig);
+    return;
+  }
+
+  const text = linesMeta[orig].raw;
+  copyToClipboard(text).then(()=> {
+    lineEl.classList.add('highlighted');
+    setTimeout(()=> lineEl.classList.remove('highlighted'), 800);
+    showToast('Copied line ' + linesMeta[orig].number);
+  }).catch(()=> showToast('Copy failed'));
+});
+
+function openModalForLine(orig){
+  modalContent.textContent = linesMeta[orig].raw;
+  modalMeta.textContent = `Line ${linesMeta[orig].number} — Type: ${linesMeta[orig].type}`;
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden','false');
+}
+
+modalClose.addEventListener('click', ()=> { modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); });
+modal.addEventListener('click', (e)=> { if(e.target === modal) { modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); } });
+
+function copyToClipboard(text){
+  if(navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+  return new Promise((resolve,reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position='fixed'; ta.style.left='-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try{
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(ok) resolve(); else reject();
+    }catch(e){ document.body.removeChild(ta); reject(e); }
+  });
+}
+
+exportBtn.addEventListener('click', () => {
+  if(!displayIndexMap.length){ showToast('No lines to export'); return; }
+  let content = '';
+  for(const idx of displayIndexMap) content += linesMeta[idx].raw + '\n';
+  const blob = new Blob([content], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'filtered_logs.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('Export started');
+});
+
+viewBtn.addEventListener('click', ()=> {
+  const txt = textInput.value;
+  if(txt.trim() === '') { showToast('Paste or load a file first'); return; }
+  processLogText(txt);
+});
+
+// Unified File Input Logic
+dropZone.addEventListener('click', () => fileInput.click()); // Click opens file dialog
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!f) return;
+  const r = new FileReader();
+  r.onload = ev => processLogText(ev.target.result);
+  r.readAsText(f);
+});
+
+fileInput.addEventListener('change', (e)=> {
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ev => processLogText(ev.target.result);
+  r.readAsText(f);
+});
+
+filterButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    filterButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    rebuildDisplayIndexMap();
+    logContainer.scrollTop = 0;
+    scheduleRender();
+  });
+});
+
+gotoFirstErrorBtn.addEventListener('click', () => {
+  for(let p = 0; p < displayIndexMap.length; p++){
+    const originalIdx = displayIndexMap[p];
+    if(linesMeta[originalIdx].type === 'error'){
+      logContainer.scrollTop = p * lineHeight;
+      scheduleRender();
+      requestAnimationFrame(()=> {
+        const el = visibleLayer.querySelector(`[data-pos="${p}"]`);
+        if(el){ el.classList.add('highlighted'); el.addEventListener('animationend', ()=> el.classList.remove('highlighted'), { once:true }); }
+      });
+      return;
+    }
+  }
+  showToast('No errors found in filtered logs');
+});
+
+gotoLastErrorBtn.addEventListener('click', () => {
+  for(let p = displayIndexMap.length - 1; p >= 0; p--){
+    const originalIdx = displayIndexMap[p];
+    if(linesMeta[originalIdx].type === 'error'){
+      logContainer.scrollTop = p * lineHeight - Math.round(logContainer.clientHeight/2);
+      scheduleRender();
+      requestAnimationFrame(()=> {
+        const el = visibleLayer.querySelector(`[data-pos="${p}"]`);
+        if(el){ el.classList.add('highlighted'); el.addEventListener('animationend', ()=> el.classList.remove('highlighted'), { once:true }); }
+      });
+      return;
+    }
+  }
+  showToast('No errors found in filtered logs');
+});
+
+searchInput.addEventListener('input', () => doSearch());
+
+function applyZoom(px){
+  currentZoom = px;
+  logContainer.style.fontSize = currentZoom + 'px';
+  computeLineHeight();
+  updateSpacer();
+  scheduleRender();
+}
+
+function updateZoomSelect(value) {
+    let option = zoomSelect.querySelector(`option[value='${value}']`);
+    if (option) {
+        zoomSelect.value = value;
+    } else {
+        // If a new value is not in the list, change it to a custom option
+        if (!zoomSelect.querySelector("option[value='custom']")) {
+            const customOption = document.createElement("option");
+            customOption.value = 'custom';
+            customOption.textContent = 'Custom';
+            zoomSelect.appendChild(customOption);
+        }
+        zoomSelect.value = 'custom';
+    }
+}
+
+zoomSelect.addEventListener('change', (e) => {
+  const px = Math.round(13 * (parseInt(e.target.value)/100));
+  applyZoom(px);
+});
+
+zoomIn.addEventListener('click', ()=> {
+  const newZoom = Math.min(30, currentZoom + 1);
+  applyZoom(newZoom);
+  updateZoomSelect(Math.round(newZoom/13*100));
+});
+
+zoomOut.addEventListener('click', ()=> {
+  const newZoom = Math.max(8, currentZoom - 1);
+  applyZoom(newZoom);
+  updateZoomSelect(Math.round(newZoom/13*100));
+});
+
+clampToggle.addEventListener('change', ()=> scheduleRender());
+
+let themeInverted = false;
+themeBtn.addEventListener('click', ()=> {
+  themeInverted = !themeInverted;
+  document.documentElement.style.filter = themeInverted ? 'invert(.95) hue-rotate(180deg)' : '';
+  showToast('Theme toggled');
+});
+
+logContainer.addEventListener('scroll', ()=> { scheduleRender(); });
+window.addEventListener('resize', ()=> { computeLineHeight(); updateSpacer(); scheduleRender(); });
+
+logContainer.addEventListener('keydown', (e)=> {
+  if((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='f'){ e.preventDefault(); searchInput.focus(); }
+});
+
+if(!textInput.value) textInput.value = '// Paste log content here or drop a .log/.txt file\n// Click a line to copy it. Shift-click (or Ctrl/Cmd+click) to expand full content in a modal.\n// Clamp long lines is ON by default to prevent overlap. Use horizontal scroll to view long lines.';
+
+computeLineHeight();
+updateZoomSelect(100);
+
+window.processLogText = processLogText;
+window.exportFilteredLogs = () => exportBtn.click();
+window.setFilter = (type) => { const b = filterButtons.find(x=>x.dataset.filter===type); if(b) b.click(); };
+window.toggleClamp = () => { clampToggle.checked = !clampToggle.checked; scheduleRender(); };
+window.toggleTheme = () => themeBtn.click();
+</script>
+</body>
+</html>
